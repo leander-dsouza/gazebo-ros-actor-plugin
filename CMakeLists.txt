@@ -11,12 +11,23 @@ find_package(catkin REQUIRED COMPONENTS
 
 find_package(gazebo REQUIRED)
 
+add_message_files(
+  FILES
+    ActorAnimation.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+    std_msgs
+)
+
 catkin_package(
-  INCLUDE_DIRS 
+  INCLUDE_DIRS
     include
-  LIBRARIES 
+  LIBRARIES
     gazebo_ros_actor_command
   CATKIN_DEPENDS
+    message_runtime
     gazebo_ros
     gazebo_plugins
     geometry_msgs

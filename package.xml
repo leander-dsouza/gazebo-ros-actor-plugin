@@ -9,14 +9,23 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>message_generation</build_depend>
+  <exec_depend>message_runtime</exec_depend>
+
   <depend>gazebo_ros</depend>
   <depend>gazebo_plugins</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
-  
+  <depend>teleop_twist_keyboard</depend>
+
   <!-- The export tag contains other, unspecified, tags -->
   <export>
+    <gazebo_ros
+      plugin_path="${prefix}/lib"
+      gazebo_media_path="${prefix}"
+      gazebo_model_path="${prefix}/config/models"/>
   </export>
-  
+
+
 </package>

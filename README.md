@@ -2,24 +2,54 @@
 
 ## About
 
-The `gazebo_ros_actor_plugin` package contains a plugin for Gazebo Classic (Version 11) and a ROS package that enables dynamic control of actors in Gazebo. The plugin allows you to control actors using either position or velocity commands.
+The `gazebo_ros_actor_plugin` package contains a plugin for Gazebo Classic and a ROS package that enables dynamic control of actors in Gazebo. The plugin allows you to control actors using either position or velocity commands.
 
 ## System Requirements
 
 Before using this package, make sure that you meet the following requirements:
 
-- ROS 1 Noetic 
-- Gazebo Classic (Version 11)
-- gazebo_ros_pkgs 
+- ROS 1 Noetic
+- Gazebo Classic
 
 ## Installation
 
-If you want to use this package with a Docker container, follow these steps:
+### Docker Setup
 
-1. Build the Docker image using `docker build -t bcr_ros-noetic_gz-11:latest .`
-2. Launch the container by running `cd docker_scripts` and `./launch_container.sh`. This will mount the package to `/root/ros2_ws/src/`.
-3. To enter a bash session, run `./bashing_container.sh`.
-4. To stop the container, run `./stop_container.sh`.
+* Build the docker image:
+
+    ```bash
+    docker compose build
+    ```
+* Run the docker container in detached mode:
+
+    ```bash
+    docker compose up -d
+    ```
+
+* Connect to the container:
+
+    ```bash
+    docker compose exec gazebo_actor bash
+    ```
+### Native Setup
+
+* Install the python dependencies:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+* Install all the ROS dependencies:
+
+    ```bash
+    rosdep install --from-paths $ROS_WS/src --ignore-src -r -yqqq
+    ```
+
+* Build your package:
+
+    ```bash
+    catkin build gazebo_ros_actor_plugin
+    ```
 
 ## Usage
 
@@ -27,12 +57,16 @@ If you want to use this package with a Docker container, follow these steps:
 
 To use the gazebo_ros_actor_plugin, follow these steps:
 
-1. Build the package using `catkin_make`.
-2. Source `setup.bash` for the workspace containing this package.
-3. Edit the parameters in the `move_actor.world` file and choose the method of subscription using the `follow_mode` tag corresponding to the plugin of the actor `actor1`. It could be either subscribing to path or velocity commands. 
-4. Launch the `sim.launch` file by running:
+1. Edit the parameters in the `move_actor.world` file and choose the method of subscription using the `follow_mode` tag corresponding to the plugin of the actor `actor1`. It could be either subscribing to path or velocity commands.
 
-    roslaunch gazebo_ros_actor_plugin sim.launch
+2. For simulating the actor without key teleop functionality:
+
+       roslaunch gazebo_ros_actor_plugin sim.launch
+
+3. For an extended set of animations and key teleop functionality:
+
+       roslaunch gazebo_ros_actor_plugin animation_switch.launch
+
 
 ### Running the Publishers
 
@@ -59,19 +93,53 @@ Note that the `path_publisher.py` file can be found in the `/scripts` directory 
 
 ![Path control of actor](res/actor_path.gif)
 
+### Animations for Static and Dynamic motion of the Actor
+
+* The Actor Animation message is defined as follows:
+
+      string idle
+      string action
+
+  The `idle`, and `action` fields are used to specify the resting and action animations of the actor, respectively.
+  A list of available animations can be found in the [animations](config/models/animations/meshes) directory.
+
+* Several animations can be cascaded together as options for the actor. This is done as follows in the [animation_switch.world](config/worlds/animation_switch.world) file:
+
+      <animation name="idle">
+        <filename>model://animations/meshes/Standing_Idle/Standing_Idle.dae</filename>
+      </animation>
+
+      <animation name="injured_walking">
+        <filename>model://animations/meshes/Injured_Walking/Injured_Walking.dae</filename>
+      </animation>
+
+      <animation name="walking">
+        <filename>model://animations/meshes/Walking/Walking.dae</filename>
+      </animation>
+
+    The `idle` animation has to be set for the plugin to work.
+
+* For adding your own animations, refer to Adobe's [Mixamo](https://www.mixamo.com) Character set library. Since Collada files have native support for animations, you can directly customize any skin with various animations from the website.
+
+* The animation switch happens through a python script that publishes the animation commands to the actor, through a custom mapping of the keyboard keys. The configuration file can be found at [animation_config.yaml](config/params/animation_config.yaml).
+
+    https://github.com/user-attachments/assets/4e740fba-f752-4c45-8035-b99f8325541d
+
+
 ### Working with different skins
 
 To work with different skins on the actor change the `default_rotation` parameter in the world file to adjust the actor.
 
 ![Different Skin Actor](res/actor_skin.gif)
 
-## Parameters in `move_actor.world`
+### Parameters in `move_actor.world` and `animation_switch.world`:
 
 The `move_actor.world` file contains the following parameters:
 
 - `follow_mode`: The mode in which the actor will follow the commands. It can be set to either `path` or `velocity`.
 - `vel_topic`: The name of the topic to which velocity commands will be published. The default topic name is `/cmd_vel`.
 - `path_topic`: The name of the topic to which path commands will be published. The default topic name is `/cmd_path`.
+- `animation_topic`: The name of the topic to which animation commands will be published. The default topic name is `/cmd_animation`.
 - `animation_factor`: Multiplier to base animation speed that adjusts the speed of both the actor's animation and foot swinging.
 - `linear_tolerance`: Maximum allowed distance between actor and target pose during path-following.
 - `linear_velocity`: Speed at which actor moves along path during path-following.

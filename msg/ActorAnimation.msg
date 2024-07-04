@@ -1,0 +1,2 @@
+string idle
+string action

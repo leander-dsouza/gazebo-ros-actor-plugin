@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+
+  <arg name="world_name" default="$(find gazebo_ros_actor_plugin)/config/worlds/animation_switch.world"/>
+  <arg name="animation_switch_config" default="$(find gazebo_ros_actor_plugin)/config/params/animation_config.yaml"/>
+  <arg name="update_rate" default="50.0"/>
+  <arg name="max_linear_vel" default="6.0"/>
+  <arg name="max_angular_vel" default="5.0"/>
+  <arg name="linear_vel_start" default="1.5"/>
+  <arg name="angular_vel_start" default="2.5"/>
+  <arg name="cmd_vel_topic" default="cmd_vel"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world_name)"/>
+  </include>
+
+	<!-- Launch the animation_switch node -->
+	<node name="animation_switch_node" pkg="gazebo_ros_actor_plugin" type="animation_switch.py" respawn="false" output="screen">
+    <param name="animation_switch_config" value="$(arg animation_switch_config)"/>
+    <param name="update_rate" value="$(arg update_rate)"/>
+    <param name="max_linear_vel" value="$(arg max_linear_vel)"/>
+    <param name="max_angular_vel" value="$(arg max_angular_vel)"/>
+    <param name="linear_vel_start" value="$(arg linear_vel_start)"/>
+    <param name="angular_vel_start" value="$(arg angular_vel_start)"/>
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+  </node>
+
+</launch>

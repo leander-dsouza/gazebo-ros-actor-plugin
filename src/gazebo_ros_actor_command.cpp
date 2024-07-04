@@ -1,3 +1,30 @@
+//
+// MIT License
+//
+// Copyright (c) 2024 Black Coffee Robotics
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+/**
+ * Program to generate an Actor capable of handling velocity, path and animation commands
+ */
+
 #include <gazebo_ros_actor_plugin/gazebo_ros_actor_command.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -8,13 +35,19 @@
 #include "gazebo/physics/physics.hh"
 #include <ignition/math.hh>
 
-using namespace gazebo;
+using gazebo::GazeboRosActorCommand;
+
 
 #define _USE_MATH_DEFINES
-#define WALKING_ANIMATION "walking"
+#define IDLE_ANIMATION "idle"
 
 /////////////////////////////////////////////////
 GazeboRosActorCommand::GazeboRosActorCommand() {
+  this->current_linear_velocity_ = 0.0;
+  this->current_angular_velocity_ = 0.0;
+
+  this->idle_animation_ = IDLE_ANIMATION;
+  this->action_animation_ = IDLE_ANIMATION;
 }
 
 GazeboRosActorCommand::~GazeboRosActorCommand() {
@@ -37,6 +70,7 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   this->follow_mode_ = "velocity";
   this->vel_topic_ = "/cmd_vel";
   this->path_topic_ = "/cmd_path";
+  this->animation_topic_ = "/cmd_animation";
   this->lin_tolerance_ = 0.1;
   this->lin_velocity_ = 1;
   this->ang_tolerance_ = IGN_DTOR(5);
@@ -52,6 +86,9 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   }
   if (_sdf->HasElement("path_topic")) {
     this->path_topic_ = _sdf->Get<std::string>("path_topic");
+  }
+  if (_sdf->HasElement("animation_topic")) {
+    this->animation_topic_ = _sdf->Get<std::string>("animation_topic");
   }
   if (_sdf->HasElement("linear_tolerance")) {
     this->lin_tolerance_ = _sdf->Get<double>("linear_tolerance");
@@ -71,7 +108,7 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   if (_sdf->HasElement("default_rotation")) {
     this->default_rotation_ = _sdf->Get<double>("default_rotation");
   }
-  
+
 
   // Check if ROS node for Gazebo has been initialized
   if (!ros::isInitialized()) {
@@ -86,6 +123,7 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   this->actor_ = boost::dynamic_pointer_cast<physics::Actor>(_model);
   this->world_ = this->actor_->GetWorld();
   this->Reset();
+
   // Create ROS node handle
   this->ros_node_ = new ros::NodeHandle();
 
@@ -117,6 +155,20 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   this->pathCallbackQueueThread_ =
       boost::thread(boost::bind(&GazeboRosActorCommand::PathQueueThread, this));
 
+  // Subscribe to the animation commands
+  ros::SubscribeOptions animation_so =
+    ros::SubscribeOptions::create<gazebo_ros_actor_plugin::ActorAnimation>(
+        animation_topic_,
+        1,
+        boost::bind(&GazeboRosActorCommand::AnimationCallback, this, _1),
+        ros::VoidPtr(),
+        &animation_queue_);
+  this->animation_sub_ = ros_node_->subscribe(animation_so);
+
+  // Create a thread for the animation callback queue
+  this->animationCallbackQueueThread_ =
+      boost::thread(boost::bind(&GazeboRosActorCommand::AnimationQueueThread, this));
+
   // Connect the OnUpdate function to the WorldUpdateBegin event.
   this->connections_.push_back(event::Events::ConnectWorldUpdateBegin(
       std::bind(&GazeboRosActorCommand::OnUpdate, this, std::placeholders::_1)));
@@ -134,16 +186,24 @@ void GazeboRosActorCommand::Reset() {
 
   // Check if the walking animation exists in the actor's skeleton animations
   auto skelAnims = this->actor_->SkeletonAnimations();
-  if (skelAnims.find(WALKING_ANIMATION) == skelAnims.end()) {
-    gzerr << "Skeleton animation " << WALKING_ANIMATION << " not found.\n";
+  if (skelAnims.find(idle_animation_) == skelAnims.end()) {
+    gzerr << "Skeleton animation " << idle_animation_ << " not found.\n";
   } else {
     // Create custom trajectory
     this->trajectoryInfo_.reset(new physics::TrajectoryInfo());
-    this->trajectoryInfo_->type = WALKING_ANIMATION;
+    this->trajectoryInfo_->type = idle_animation_;
     this->trajectoryInfo_->duration = 1.0;
 
     // Set the actor's trajectory to the custom trajectory
     this->actor_->SetCustomTrajectory(this->trajectoryInfo_);
+
+    // set action animation to the first available animation
+    for (auto const& anim : skelAnims) {
+      if (anim.first != IDLE_ANIMATION) {
+        this->action_animation_ = anim.first;
+        break;
+      }
+    }
   }
 }
 
@@ -152,6 +212,10 @@ void GazeboRosActorCommand::VelCallback(const geometry_msgs::Twist::ConstPtr &ms
   vel_cmd.X() = msg->linear.x;
   vel_cmd.Z() = msg->angular.z;
   this->cmd_queue_.push(vel_cmd);
+
+  // set current linear and angular velocity
+  this->current_linear_velocity_ = vel_cmd.X();
+  this->current_angular_velocity_ = vel_cmd.Z();
 }
 
 void GazeboRosActorCommand::PathCallback(const nav_msgs::Path::ConstPtr &msg) {
@@ -176,12 +240,60 @@ void GazeboRosActorCommand::PathCallback(const nav_msgs::Path::ConstPtr &msg) {
   }
 }
 
+void GazeboRosActorCommand::AnimationCallback(
+  const gazebo_ros_actor_plugin::ActorAnimation::ConstPtr &msg) {
+  idle_animation_ = msg->idle;
+  action_animation_ = msg->action;
+
+  // Check if the action animation exists in the actor's skeleton animations
+  auto skelAnims = this->actor_->SkeletonAnimations();
+
+  if (skelAnims.find(action_animation_) == skelAnims.end()) {
+    gzerr << "Skeleton animation " << action_animation_ << " not found.\n";
+  } else {
+    // Create custom trajectory
+    this->trajectoryInfo_.reset(new physics::TrajectoryInfo());
+    this->trajectoryInfo_->type = action_animation_;
+    this->trajectoryInfo_->duration = 1.0;
+
+    // Set the actor's trajectory to the custom trajectory
+    this->actor_->SetCustomTrajectory(this->trajectoryInfo_);
+  }
+}
+
 /////////////////////////////////////////////////
 void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
+  // Set idle animation if no velocity or path commands are received
+  if ((this->current_linear_velocity_ == 0.0 && this->current_angular_velocity_ == 0.0 &&
+        this->follow_mode_ == "velocity") ||
+        (this->target_poses_.size() == 1 && this->follow_mode_ == "path")) {
+    // update the last update time
+    this->last_update_ = _info.simTime;
+
+    // apply the default rotation
+    ignition::math::Pose3d pose = this->actor_->WorldPose();
+    ignition::math::Vector3d rpy = pose.Rot().Euler();
+    pose.Rot() = ignition::math::Quaterniond(default_rotation_, 0, rpy.Z());
+    this->actor_->SetWorldPose(pose, false, false);
+
+    // set the actor's trajectory to the idle animation
+    this->trajectoryInfo_->type = idle_animation_;
+    this->trajectoryInfo_->duration = 1.0;
+
+    this->actor_->SetScriptTime(this->actor_->ScriptTime() + 0.001 * animation_factor_);
+    this->actor_->SetCustomTrajectory(this->trajectoryInfo_);
+    return;
+  }
+
   // Time delta
   double dt = (_info.simTime - this->last_update_).Double();
   ignition::math::Pose3d pose = this->actor_->WorldPose();
   ignition::math::Vector3d rpy = pose.Rot().Euler();
+
+  // Set the actor's trajectory to the action animation
+  this->trajectoryInfo_->type = this->action_animation_;
+  this->trajectoryInfo_->duration = 1.0;
+  this->actor_->SetCustomTrajectory(this->trajectoryInfo_);
 
   if (this->follow_mode_ == "path") {
     ignition::math::Vector2d target_pos_2d(this->target_pose_.X(),
@@ -195,13 +307,16 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
     if (distance < this->lin_tolerance_) {
       // If there are more targets, choose new target
       if (this->idx_ < this->target_poses_.size() - 1) {
-      this->ChooseNewTarget();
-      pos.X() = this->target_pose_.X() - pose.Pos().X();
-      pos.Y() = this->target_pose_.Y() - pose.Pos().Y();
+        this->ChooseNewTarget();
+        pos.X() = this->target_pose_.X() - pose.Pos().X();
+        pos.Y() = this->target_pose_.Y() - pose.Pos().Y();
       } else {
         // All targets have been accomplished, stop moving
         pos.X() = 0;
         pos.Y() = 0;
+        target_poses_.clear();
+        target_poses_.push_back(ignition::math::Vector3d(0.0, 0.0, 0.0));
+        this->idx_ = 0;
       }
     }
 
@@ -222,11 +337,9 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
       rot_sign = -1;
     // Check if required angular displacement is greater than tolerance
     if (std::abs(yaw.Radian()) > this->ang_tolerance_) {
-
       pose.Rot() = ignition::math::Quaterniond(default_rotation_, 0, rpy.Z()+
             rot_sign*this->ang_velocity_ * dt);
-    } 
-    else {
+    } else {
         // Move towards the target position
         pose.Pos().X() += pos.X() * this->lin_velocity_ * dt;
         pose.Pos().Y() += pos.Y() * this->lin_velocity_ * dt;
@@ -234,8 +347,7 @@ void GazeboRosActorCommand::OnUpdate(const common::UpdateInfo &_info) {
         pose.Rot() = ignition::math::Quaterniond(
           default_rotation_, 0, rpy.Z()+yaw.Radian());
     }
-  }
-  else if (this->follow_mode_ == "velocity") {
+  } else if (this->follow_mode_ == "velocity") {
     if (!this->cmd_queue_.empty()) {
       this->target_vel_.Pos().X() = this->cmd_queue_.front().X();
       this->target_vel_.Rot() = ignition::math::Quaterniond(
@@ -281,6 +393,13 @@ void GazeboRosActorCommand::PathQueueThread() {
 
   while (this->ros_node_->ok())
     this->path_queue_.callAvailable(ros::WallDuration(timeout));
+}
+
+void GazeboRosActorCommand::AnimationQueueThread() {
+  static const double timeout = 0.01;
+
+  while (this->ros_node_->ok())
+    this->animation_queue_.callAvailable(ros::WallDuration(timeout));
 }
 
 GZ_REGISTER_MODEL_PLUGIN(GazeboRosActorCommand)

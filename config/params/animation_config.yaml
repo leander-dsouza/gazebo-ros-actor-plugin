@@ -1,0 +1,7 @@
+# map input keys to animations
+'1': 'injured_walking'
+'2': 'walking'
+'3': 'jogging'
+'4': 'hip_hop_dancing'
+'5': 'jazz_dancing'
+'6': 'ymca_dance'

@@ -1,0 +1,46 @@
+services:
+  gazebo_actor:
+    image: bcr_noetic:latest
+    container_name: bcr_noetic_test
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    #  Interactive mode
+    stdin_open: true
+    tty: true
+
+    # Enable GPU support
+    runtime: nvidia
+
+    # Networking and IPC for ROS
+    network_mode: host
+    ipc: host
+    # Needed to display graphical applications
+    privileged: true
+
+    environment:
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+      - DISPLAY=$DISPLAY
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      # Allows graphical programs in the container.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority
+      - $PWD:/root/catkin_ws/src/gazebo-ros-actor-plugin
+
+    command:
+      - /bin/bash
+      - -c
+      - |
+        # Ensure timeouts are set to a minimum to enable faster exit
+        sed -i -e 's/_TIMEOUT_SIGINT  = 15.0/_TIMEOUT_SIGINT  = 1e-323/g' \
+          -e 's/_TIMEOUT_SIGTERM = 2.0/_TIMEOUT_SIGTERM = 1e-323/g' \
+            /opt/ros/noetic/lib/python3/dist-packages/roslaunch/nodeprocess.py
+
+        # Set folder for RUNTIME_DIR for RViz
+        mkdir tmp/runtime-root && chmod 0700 tmp/runtime-root
+
+        bash
